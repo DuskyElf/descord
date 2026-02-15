@@ -8,6 +8,7 @@ use super::channel::Channel;
 use super::components::Component;
 use super::embed::Embed;
 use super::guild::{Guild, Member};
+use crate::internals::DescordError;
 use crate::prelude::User;
 use crate::utils;
 use crate::{consts, Client};
@@ -79,7 +80,7 @@ impl Message {
     /// ```
     /// message.reply("Hello, world!").await;
     /// ```
-    pub async fn reply(&self, data: impl Into<CreateMessageData>) -> Message {
+    pub async fn reply(&self, data: impl Into<CreateMessageData>) -> Result<Message, DescordError> {
         utils::send(&self.channel_id, Some(&self.id), data).await
     }
 
@@ -94,7 +95,7 @@ impl Message {
     /// ```
     /// message.send_in_channel("Hello, world!").await;
     /// ```
-    pub async fn send_in_channel(&self, data: impl Into<CreateMessageData>) -> Message {
+    pub async fn send_in_channel(&self, data: impl Into<CreateMessageData>) -> Result<Message, DescordError> {
         utils::send(&self.channel_id, None, data).await
     }
 
@@ -105,12 +106,12 @@ impl Message {
     /// ```
     /// let channel = message.get_channel().await?;
     /// ```
-    pub async fn get_channel(&self) -> Result<Channel, Box<dyn std::error::Error>> {
+    pub async fn get_channel(&self) -> Result<Channel, DescordError> {
         utils::fetch_channel(&self.channel_id).await
     }
 
     /// Sends typing indicator.
-    pub async fn send_typing(&self) -> Result<(), Box<dyn Error>> {
+    pub async fn send_typing(&self) -> Result<(), DescordError> {
         utils::send_typing(&self.channel_id).await
     }
 
@@ -121,7 +122,7 @@ impl Message {
     /// ```
     /// let author = message.get_author().await?;
     /// ```
-    pub async fn get_author(&self) -> Result<Member, Box<dyn Error>> {
+    pub async fn get_author(&self) -> Result<Member, DescordError> {
         utils::fetch_member(
             self.guild_id.as_ref().unwrap(),
             &self.author.as_ref().unwrap().id,
@@ -136,7 +137,7 @@ impl Message {
     /// ```
     /// let guild = message.get_guild().await?;
     /// ```
-    pub async fn get_guild(&self) -> Result<Guild, Box<dyn Error>> {
+    pub async fn get_guild(&self) -> Result<Guild, DescordError> {
         utils::fetch_guild(self.guild_id.as_ref().unwrap()).await
     }
 
@@ -162,7 +163,7 @@ impl Message {
     /// ```
     /// message.delete().await;
     /// ```
-    pub async fn delete(&self) -> bool {
+    pub async fn delete(&self) -> Result<(), DescordError> {
         utils::delete_message(&self.channel_id, &self.id).await
     }
 
@@ -177,9 +178,9 @@ impl Message {
     /// ```
     /// message.delete_after(tokio::time::Duration::from_secs(10)).await;
     /// ```
-    pub async fn delete_after(&self, time: tokio::time::Duration) {
-        tokio::time::sleep(time);
-        self.delete().await;
+    pub async fn delete_after(&self, time: tokio::time::Duration) -> Result<(), DescordError> {
+        tokio::time::sleep(time).await;
+        self.delete().await
     }
 
     /// Edit the message.
@@ -193,8 +194,8 @@ impl Message {
     /// ```
     /// message.edit("Edited message").await;
     /// ```
-    pub async fn edit(&self, data: impl Into<CreateMessageData>) {
-        utils::edit_message(&self.channel_id, &self.id, data).await;
+    pub async fn edit(&self, data: impl Into<CreateMessageData>) -> Result<(), DescordError> {
+        utils::edit_message(&self.channel_id, &self.id, data).await
     }
 
     /// React to the message with an emoji.
@@ -208,8 +209,8 @@ impl Message {
     /// ```
     /// message.react("👍").await;
     /// ```
-    pub async fn react(&self, emoji: &str) {
-        utils::react(&self.channel_id, &self.id, emoji).await;
+    pub async fn react(&self, emoji: &str) -> Result<(), DescordError> {
+        utils::react(&self.channel_id, &self.id, emoji).await
     }
 }
 
@@ -355,13 +356,15 @@ impl From<Vec<Embed>> for CreateMessageData {
     /// let message_data: CreateMessageData = vec![embed1, embed2].into();
     /// ```
     fn from(value: Vec<Embed>) -> Self {
-        assert!(
-            value.len() <= 10,
-            "A message can only contain up to 10 rich embeds"
-        );
+        let embeds = if value.len() > 10 {
+            log::warn!("Messages can only contain max of 10 rich embeds, truncating");
+            value.into_iter().take(10).collect()
+        } else {
+            value
+        };
 
         CreateMessageData {
-            embeds: value,
+            embeds,
             ..Default::default()
         }
     }

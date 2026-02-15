@@ -1,3 +1,4 @@
+use crate::internals::DescordError;
 use crate::utils;
 use nanoserde::{DeJson, SerJson};
 
@@ -104,7 +105,7 @@ impl Channel {
     /// ```
     /// channel.send_message("Hello, world!").await;
     /// ```
-    pub async fn send_message(&self, data: impl Into<CreateMessageData>) -> Message {
+    pub async fn send_message(&self, data: impl Into<CreateMessageData>) -> Result<Message, DescordError> {
         utils::send(&self.id, None, data).await
     }
 
@@ -115,7 +116,8 @@ impl Channel {
     /// ```
     /// channel.send_typing().await;
     /// ```
-    pub async fn send_typing(&self) {
-        utils::send_typing(&self.id).await;
+    pub async fn send_typing(&self) -> Result<(), DescordError> {
+        utils::send_typing(&self.id).await?;
+        Ok(())
     }
 }

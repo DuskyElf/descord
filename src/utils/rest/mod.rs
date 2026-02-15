@@ -9,6 +9,7 @@ pub use misc::*;
 use crate::cache::*;
 use crate::client::TOKEN;
 use crate::consts::API;
+use crate::internals::{DescordError, DiscordApiError};
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

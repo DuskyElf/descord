@@ -107,8 +107,8 @@ pub mod internals;
 pub use consts::events::Event;
 pub use consts::color;
 
-// TODO: change the error type
-pub type DescordResult = Result<(), Box<dyn std::error::Error + Send>>;
+// Re-export error types and result aliases from internals
+pub use internals::{DescordError, DescordResult, HandlerResult};
 
 pub(crate) mod cache;
 
@@ -129,5 +129,6 @@ pub mod prelude {
             role_response::*, user::User,
         },
         Payload,
+        DescordError, DescordResult, HandlerResult,
     };
 }

@@ -12,7 +12,7 @@ pub struct Command {
 }
 
 impl Command {
-    pub async fn call(&self, data: Message) -> DescordResult {
+    pub async fn call(&self, data: Message) -> HandlerResult {
         let split = parse_args(&data.content);
         let mut args: Vec<Value> = Vec::with_capacity(self.fn_sig.len());
 
@@ -27,16 +27,34 @@ impl Command {
                     } else {
                         Value::String(split[idx].to_owned())
                     }),
-                    ParamType::Int => args.push(if optional {
-                        Value::IntOption(Some(split[idx].parse::<isize>().unwrap()))
-                    } else {
-                        Value::Int(split[idx].parse::<isize>().unwrap())
-                    }),
-                    ParamType::Bool => args.push(if optional {
-                        Value::BoolOption(Some(split[idx].parse::<bool>().unwrap()))
-                    } else {
-                        Value::Bool(split[idx].parse::<bool>().unwrap())
-                    }),
+                    ParamType::Int => {
+                        match split[idx].parse::<isize>() {
+                            Ok(val) => args.push(if optional {
+                                Value::IntOption(Some(val))
+                            } else {
+                                Value::Int(val)
+                            }),
+                            Err(_) => return Err(Box::new(DescordError::InvalidArgument {
+                                param: format!("argument {}", idx),
+                                expected: "integer".to_string(),
+                                got: split[idx].to_owned(),
+                            })),
+                        }
+                    },
+                    ParamType::Bool => {
+                        match split[idx].parse::<bool>() {
+                            Ok(val) => args.push(if optional {
+                                Value::BoolOption(Some(val))
+                            } else {
+                                Value::Bool(val)
+                            }),
+                            Err(_) => return Err(Box::new(DescordError::InvalidArgument {
+                                param: format!("argument {}", idx),
+                                expected: "bool".to_string(),
+                                got: split[idx].to_owned(),
+                            })),
+                        }
+                    },
                     ParamType::Channel => {
                         let channel_id_str = &split[idx];
                         let channel_id =
@@ -51,11 +69,7 @@ impl Command {
                             } else {
                                 Value::Channel(channel)
                             }),
-                            Err(_) => {
-                                if !optional {
-                                    panic!("Channel not found")
-                                }
-                            }
+                            Err(e) => return Err(Box::new(e)),
                         }
                     }
                     ParamType::User => {
@@ -72,11 +86,7 @@ impl Command {
                             } else {
                                 Value::User(user)
                             }),
-                            Err(_) => {
-                                if !optional {
-                                    panic!("User not found")
-                                }
-                            }
+                            Err(e) => return Err(Box::new(e)),
                         }
                     }
                     ParamType::Args => {
@@ -96,9 +106,10 @@ impl Command {
                     _ => {}
                 }
             } else {
-                return Err(Box::new(DescordError::MissingRequiredArgument(
-                    self.name.clone(),
-                )));
+                return Err(Box::new(DescordError::MissingRequiredArgument {
+                    command: self.name.clone(),
+                    param: format!("argument {}", idx),
+                }));
             }
 
             idx += 1;
@@ -106,7 +117,7 @@ impl Command {
 
         let fut = ((self.handler_fn)(data, args));
         let boxed_fut: std::pin::Pin<
-            Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>,
+            Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>,
         > = Box::pin(fut);
 
         boxed_fut.await?;

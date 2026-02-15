@@ -3,37 +3,29 @@ use crate::consts::ChannelType;
 use super::*;
 
 /// Get a channel by ID
-pub async fn fetch_channel(channel_id: &str) -> Result<Channel, Box<dyn std::error::Error>> {
+pub async fn fetch_channel(channel_id: &str) -> Result<Channel, DescordError> {
     // check if channel is in cache
     // if let Some(channel) = CHANNEL_CACHE.lock().unwrap().get(channel_id).cloned() {
         // return Ok(channel);
     // }
 
     let url = format!("channels/{channel_id}");
-    let resp = request(Method::GET, &url, None).await.text().await?;
-    let mut channel = Channel::deserialize_json(&resp).map_err(|e| e.into());
+    let resp = request(Method::GET, &url, None).await?.text().await.map_err(DescordError::Http)?;
+    let mut channel = Channel::deserialize_json(&resp).map_err(DescordError::DeserializeJson)?;
 
-    if let Ok(i) = channel.as_mut() {
-        i.id = channel_id.to_owned();
-    }
+    channel.id = channel_id.to_owned();
+    channel.mention = format!("<#{}>", channel.id);
 
-    if let Ok(channel) = &mut channel {
-        channel.mention = format!("<#{}>", channel.id);
-    }
+    // CHANNEL_CACHE.lock().unwrap().put(channel_id.to_string(), channel.clone());
 
-    let mut channel_clone = channel.as_ref().cloned().unwrap(); // works
-    let channel_id = channel_clone.id.clone();
-
-    // CHANNEL_CACHE.lock().unwrap().put(channel_id, channel_clone);
-
-    channel
+    Ok(channel)
 }
 
 /// Deletes a channel by ID
 /// Deleting a guild channel cannot be undone.
-pub async fn delete_channel(channel_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn delete_channel(channel_id: &str) -> Result<(), DescordError> {
     let url = format!("channels/{channel_id}");
-    request(Method::DELETE, &url, None).await.text().await?;
+    request(Method::DELETE, &url, None).await?;
 
     // CHANNEL_CACHE.lock().unwrap().pop_entry(channel_id);
 
@@ -41,23 +33,23 @@ pub async fn delete_channel(channel_id: &str) -> Result<(), Box<dyn std::error::
 }
 
 /// Create a channel in a guild
-pub async fn create_channel() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn create_channel() -> Result<(), DescordError> {
     let endpoint = "guilds/{guild.id}/channels";
     todo!();
 }
 
 /// Post a typing indicator for the specified channel, which expires after 10 seconds.
-pub async fn send_typing(channel_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn send_typing(channel_id: &str) -> Result<(), DescordError> {
     let url = format!("channels/{channel_id}/typing");
-    request(Method::POST, &url, None).await.text().await?;
+    request(Method::POST, &url, None).await?;
     Ok(())
 }
 
 /// Update channel info.
-pub async fn update_channel(channel: Channel) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn update_channel(channel: Channel) -> Result<(), DescordError> {
     let channel_id = &channel.id;
     let url = format!("channels/{channel_id}");
-    request(Method::PATCH, &url, Some(&channel.serialize_json())).await;
+    request(Method::PATCH, &url, Some(&channel.serialize_json())).await?;
 
     Ok(())
 }

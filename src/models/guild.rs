@@ -1,10 +1,13 @@
 use super::message_response::CreateMessageData;
 use super::{channel::Channel, user::User};
 use crate::consts::DISCORD_CDN;
+use crate::internals::DescordError;
 use crate::prelude::Role;
 use crate::{prelude::ImageFormat, utils};
 use nanoserde::{DeJson, SerJson};
 use reqwest::Method;
+
+use crate::models::message_response::Message;
 
 /// Represents a Discord guild (server).
 #[derive(DeJson, SerJson, Debug, Clone)]
@@ -253,7 +256,7 @@ impl Guild {
     /// ```
     /// let member = guild.fetch_member("user_id").await?;
     /// ```
-    pub async fn fetch_member(&self, user_id: &str) -> Result<Member, Box<dyn std::error::Error>> {
+    pub async fn fetch_member(&self, user_id: &str) -> Result<Member, DescordError> {
         utils::fetch_member(&self.id, user_id).await
     }
 
@@ -268,7 +271,7 @@ impl Guild {
     /// ```
     /// let role = guild.fetch_role("role_id").await?;
     /// ```
-    pub async fn fetch_role(&self, role_id: &str) -> Result<Role, Box<dyn std::error::Error>> {
+    pub async fn fetch_role(&self, role_id: &str) -> Result<Role, DescordError> {
         utils::fetch_role(&self.id, role_id).await
     }
 
@@ -279,7 +282,7 @@ impl Guild {
     /// ```
     /// let default_role = guild.default_role().await?;
     /// ```
-    pub async fn default_role(&self) -> Result<Role, Box<dyn std::error::Error>> {
+    pub async fn default_role(&self) -> Result<Role, DescordError> {
         utils::fetch_role(&self.id, &self.id).await
     }
 }
@@ -328,7 +331,7 @@ impl Member {
     /// ```
     /// member.send_dm("Hello, world!").await;
     /// ```
-    pub async fn send_dm(&self, data: impl Into<CreateMessageData>) {
-        utils::send_dm(&self.user.as_ref().unwrap().id, data).await;
+    pub async fn send_dm(&self, data: impl Into<CreateMessageData>) -> Result<Message, DescordError> {
+        utils::send_dm(&self.user.as_ref().unwrap().id, data).await
     }
 }

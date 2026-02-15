@@ -9,7 +9,7 @@ pub type SlashHandlerFn = fn(
     Interaction,
     Vec<Value>,
 ) -> std::pin::Pin<
-    Box<dyn futures_util::Future<Output = DescordResult> + Send + 'static>,
+    Box<dyn futures_util::Future<Output = HandlerResult> + Send + 'static>,
 >;
 
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub struct SlashCommand {
 }
 
 impl SlashCommand {
-    pub async fn call(&self, data: Interaction) -> DescordResult {
+    pub async fn call(&self, data: Interaction) -> HandlerResult {
         let split: Vec<String> = data
             .clone()
             .data
@@ -50,16 +50,34 @@ impl SlashCommand {
                     } else {
                         Value::String(split[idx].to_owned())
                     }),
-                    ParamType::Int => args.push(if optional {
-                        Value::IntOption(Some(split[idx].parse::<isize>().unwrap()))
-                    } else {
-                        Value::Int(split[idx].parse::<isize>().unwrap())
-                    }),
-                    ParamType::Bool => args.push(if optional {
-                        Value::BoolOption(Some(split[idx].parse::<bool>().unwrap()))
-                    } else {
-                        Value::Bool(split[idx].parse::<bool>().unwrap())
-                    }),
+                    ParamType::Int => {
+                        match split[idx].parse::<isize>() {
+                            Ok(val) => args.push(if optional {
+                                Value::IntOption(Some(val))
+                            } else {
+                                Value::Int(val)
+                            }),
+                            Err(_) => return Err(Box::new(DescordError::InvalidArgument {
+                                param: self.fn_param_names.get(idx).cloned().unwrap_or_else(|| format!("argument {}", idx)),
+                                expected: "integer".to_string(),
+                                got: split[idx].to_owned(),
+                            })),
+                        }
+                    },
+                    ParamType::Bool => {
+                        match split[idx].parse::<bool>() {
+                            Ok(val) => args.push(if optional {
+                                Value::BoolOption(Some(val))
+                            } else {
+                                Value::Bool(val)
+                            }),
+                            Err(_) => return Err(Box::new(DescordError::InvalidArgument {
+                                param: self.fn_param_names.get(idx).cloned().unwrap_or_else(|| format!("argument {}", idx)),
+                                expected: "bool".to_string(),
+                                got: split[idx].to_owned(),
+                            })),
+                        }
+                    },
                     ParamType::Channel => {
                         let channel_id_str = &split[idx];
                         let channel_id =
@@ -74,12 +92,7 @@ impl SlashCommand {
                             } else {
                                 Value::Channel(channel)
                             }),
-                            Err(e) => {
-                                log::error!("{:?}", e);
-                                if !optional {
-                                    panic!("Channel not found")
-                                }
-                            }
+                            Err(e) => return Err(Box::new(e)),
                         }
                     }
                     ParamType::User => {
@@ -96,12 +109,7 @@ impl SlashCommand {
                             } else {
                                 Value::User(user)
                             }),
-                            Err(e) => {
-                                log::error!("{:?}", e);
-                                if !optional {
-                                    panic!("User not found")
-                                }
-                            }
+                            Err(e) => return Err(Box::new(e)),
                         }
                     }
                     _ => {}
@@ -116,9 +124,10 @@ impl SlashCommand {
                     _ => {}
                 }
             } else {
-                return Err(Box::new(DescordError::MissingRequiredArgument(
-                    self.name.clone(),
-                )));
+                return Err(Box::new(DescordError::MissingRequiredArgument {
+                    command: self.name.clone(),
+                    param: self.fn_param_names.get(idx).cloned().unwrap_or_else(|| format!("argument {}", idx)),
+                }));
             }
 
             idx += 1;
@@ -126,7 +135,7 @@ impl SlashCommand {
 
         let fut = ((self.handler_fn)(data, args));
         let boxed_fut: std::pin::Pin<
-            Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>,
+            Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>,
         > = Box::pin(fut);
 
         boxed_fut.await?;

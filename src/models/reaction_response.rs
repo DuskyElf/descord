@@ -1,5 +1,6 @@
 use nanoserde::{DeJson, SerJson};
 
+use crate::internals::DescordError;
 use crate::utils;
 
 use super::{channel::Channel, emoji::Emoji, guild::Member, message_response::Message, user::User};
@@ -41,7 +42,7 @@ impl Reaction {
     /// ```
     /// let channel = reaction.get_channel().await?;
     /// ```
-    pub async fn get_channel(&self) -> Result<Channel, Box<dyn std::error::Error>> {
+    pub async fn get_channel(&self) -> Result<Channel, DescordError> {
         utils::fetch_channel(&self.channel_id).await
     }
 
@@ -52,7 +53,7 @@ impl Reaction {
     /// ```
     /// let user = reaction.get_user().await?;
     /// ```
-    pub async fn get_user(&self) -> Result<User, Box<dyn std::error::Error>> {
+    pub async fn get_user(&self) -> Result<User, DescordError> {
         utils::fetch_user(&self.user_id).await
     }
 
@@ -63,7 +64,7 @@ impl Reaction {
     /// ```
     /// let message = reaction.get_message().await?;
     /// ```
-    pub async fn get_message(&self) -> Result<Message, Box<dyn std::error::Error>> {
+    pub async fn get_message(&self) -> Result<Message, DescordError> {
         utils::fetch_message(&self.channel_id, &self.message_id).await
     }
 
@@ -74,7 +75,7 @@ impl Reaction {
     /// ```
     /// reaction.remove_reaction().await;
     /// ```
-    pub async fn remove_reaction(&self) {
+    pub async fn remove_reaction(&self) -> Result<(), DescordError> {
         utils::remove_reaction(
             &self.channel_id,
             &self.message_id,
@@ -85,6 +86,6 @@ impl Reaction {
                 self.emoji.name.clone()
             },
         )
-        .await;
+        .await
     }
 }

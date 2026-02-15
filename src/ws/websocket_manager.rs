@@ -166,9 +166,9 @@ impl WsManager {
                     }
 
                     tokio::spawn(async move {
-                        Self::dispatch_event(payload, seq, handlers)
-                            .await
-                            .expect("Failed to parse json response");
+                        if let Err(e) = Self::dispatch_event(payload, seq, handlers).await {
+                            log::error!("Error dispatching event: {}", e);
+                        }
                     });
                 }
             } else {
@@ -193,7 +193,7 @@ impl WsManager {
         payload: Payload,
         seq: Arc<Mutex<usize>>,
         handlers: Handlers,
-    ) -> Result<(), nanoserde::DeJsonErr> {
+    ) -> Result<(), DescordError> {
         // info!(
         //     "payload: {}",
         //     json::parse(&payload.raw_json).unwrap().pretty(4)
@@ -209,7 +209,7 @@ impl WsManager {
 
         let data = match event {
             Event::Ready => {
-                let data = ReadyResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = ReadyResponse::deserialize_json(&payload.raw_json)?;
 
                 *RESUME_GATEWAY_URL.lock().unwrap() = Some(data.data.resume_gateway_url.clone());
                 *SESSION_ID.lock().unwrap() = Some(data.data.session_id.clone());
@@ -219,7 +219,7 @@ impl WsManager {
             }
 
             Event::MessageCreate => {
-                let message_data = MessageResponse::deserialize_json(&payload.raw_json).unwrap();
+                let message_data = MessageResponse::deserialize_json(&payload.raw_json)?;
 
                 MESSAGE_CACHE
                     .lock()
@@ -231,26 +231,33 @@ impl WsManager {
                         let mut required_permissions: u64 = 0;
 
                         for permission in &command_handler_fn.permissions {
-                            required_permissions |= consts::permissions::parse(permission)
-                                .expect("Invalid permission name");
+                            if let Some(p) = consts::permissions::parse(permission) {
+                                required_permissions |= p;
+                            } else {
+                                log::error!("Invalid permission name: {}", permission);
+                            }
                         }
 
                         let msg_id = message_data.data.id.clone();
                         let channel_id = message_data.data.channel_id.clone();
 
                         if required_permissions != 0 {
-                            let channel = fetch_channel(&channel_id).await.unwrap();
-                            let guild = fetch_guild(channel.guild_id.as_ref().unwrap())
-                                .await
-                                .unwrap();
+                            // Using map_err to convert errors
+                            let channel = fetch_channel(&channel_id).await?;
+                            let guild_id = channel.guild_id.as_deref().ok_or(DescordError::Other("Channel has no guild_id".into()))?;
+                            let guild = fetch_guild(guild_id).await?;
+                            
                             let data = message_data.data.clone();
-                            let user_permissions: u64 = Self::fetch_permissions(
-                                data.member.unwrap().roles,
-                                data.author.unwrap().id,
+                            let member = data.member.as_ref().ok_or(DescordError::Other("Message has no member".into()))?;
+                            let author = data.author.as_ref().ok_or(DescordError::Other("Message has no author".into()))?;
+
+                            let user_permissions = Self::fetch_permissions(
+                                member.roles.clone(),
+                                author.id.clone(),
                                 &guild,
                                 Some(&channel),
                             )
-                            .await;
+                            .await?;
 
                             // bypass the role check if user has admin perms
                             if user_permissions != consts::permissions::ADMINISTRATOR
@@ -258,19 +265,26 @@ impl WsManager {
                             {
                                 utils::send(
                                     &channel_id,
-                                    Some(
-                                    &msg_id),
+                                    Some(&msg_id),
                                     "You are missing the required permissions for running this command",
                                 )
-                                    .await;
+                                .await?;
 
                                 return Ok(());
                             }
                         }
 
                         let handler = command_handler_fn.clone();
-                        if let Err(e) = command_handler_fn.call(message_data.data.clone()).await {
-                            utils::send(&channel_id, Some(&msg_id), e.to_string()).await;
+                        // Command handler returns HandlerResult, handle error
+                        if let Err(e) = handler.call(message_data.data.clone()).await {
+                            if let Some(error_handler) = &handlers.error_handler {
+                                error_handler(DescordError::CommandHandler {
+                                    command: command_name.to_string(),
+                                    source: e,
+                                });
+                            } else {
+                                let _ = utils::send(&channel_id, Some(&msg_id), e.to_string()).await;
+                            }
                         }
 
                         return Ok(());
@@ -281,7 +295,7 @@ impl WsManager {
             }
 
             Event::MessageUpdate => {
-                let message_data = MessageResponse::deserialize_json(&payload.raw_json).unwrap();
+                let message_data = MessageResponse::deserialize_json(&payload.raw_json)?;
 
                 MESSAGE_CACHE
                     .lock()
@@ -293,20 +307,20 @@ impl WsManager {
 
             Event::GuildMemberRemove => {
                 let data: misc::ResponseWrapper<MemberLeave> =
-                    DeJson::deserialize_json(&payload.raw_json).unwrap();
+                    DeJson::deserialize_json(&payload.raw_json)?;
                 data.data.into()
             }
 
             Event::GuildMemberAdd => {
                 info!("{}", payload.raw_json);
                 let data: misc::ResponseWrapper<Member> =
-                    DeJson::deserialize_json(&payload.raw_json).unwrap();
+                    DeJson::deserialize_json(&payload.raw_json)?;
 
                 data.data.into()
             }
 
             Event::MessageDelete => {
-                let data = DeletedMessageResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = DeletedMessageResponse::deserialize_json(&payload.raw_json)?;
 
                 if let Some(cached_data) = MESSAGE_CACHE.lock().await.pop(&data.data.message_id) {
                     if let Some(handler) = handlers
@@ -319,7 +333,8 @@ impl WsManager {
 
                         tokio::spawn(async move {
                             if let Err(e) = handler.call(data.data.into()).await {
-                                utils::send(&channel_id, Some(&msg_id), e.to_string()).await;
+                                // Ignore error sending error message
+                                let _ = utils::send(&channel_id, Some(&msg_id), e.to_string()).await;
                             }
                         });
                     }
@@ -332,11 +347,12 @@ impl WsManager {
             }
 
             Event::Reconnect => {
-                unreachable!("Reconnecting is already handled before this function call")
+                // This case should be handled by the loop in connect()
+                return Ok(());
             }
 
             Event::GuildRoleCreate => {
-                let data = RoleCreateResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = RoleCreateResponse::deserialize_json(&payload.raw_json)?;
                 ROLE_CACHE
                     .lock()
                     .await
@@ -345,7 +361,7 @@ impl WsManager {
             }
 
             Event::GuildRoleUpdate => {
-                let data = RoleUpdateResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = RoleUpdateResponse::deserialize_json(&payload.raw_json)?;
                 ROLE_CACHE
                     .lock()
                     .await
@@ -354,90 +370,106 @@ impl WsManager {
             }
 
             Event::GuildRoleDelete => {
-                let data = RoleDeleteResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = RoleDeleteResponse::deserialize_json(&payload.raw_json)?;
                 ROLE_CACHE.lock().await.pop(&data.data.role_id);
                 data.data.into()
             }
 
             Event::MessageReactionAdd => {
-                let data = ReactionResponse::deserialize_json(&payload.raw_json).unwrap();
+                let data = ReactionResponse::deserialize_json(&payload.raw_json)?;
                 data.data.into()
             }
 
             Event::GuildCreate => {
-                let data =
-                    GuildCreateResponse::deserialize_json(&payload.raw_json).unwrap_or_else(|e| {
-                        panic!(
-                            "Failing part: {}",
-                            &payload.raw_json[e.col - 10..e.col + 10]
-                        );
-                    });
+                let data = GuildCreateResponse::deserialize_json(&payload.raw_json)
+                    .map_err(DescordError::DeserializeJson)?;
                 data.data.into()
             }
 
             Event::InteractionCreate => {
                 // A band-aid solution
-                let mut json = json::parse(&payload.raw_json).unwrap();
-                let json =
-                    if let json::JsonValue::Array(options) = &mut json["d"]["data"]["options"] {
-                        for option in options {
-                            option["value"] = json::JsonValue::String(option["value"].to_string());
-                        }
+                let mut json = json::parse(&payload.raw_json)
+                    .map_err(|e| DescordError::JsonParse(e.to_string()))?;
+                
+                let json_dump = if let json::JsonValue::Array(options) = &mut json["d"]["data"]["options"] {
+                    for option in options {
+                        option["value"] = json::JsonValue::String(option["value"].to_string());
+                    }
+                    json.dump()
+                } else {
+                    payload.raw_json.clone()
+                };
 
-                        json.dump()
-                    } else {
-                        payload.raw_json.clone()
-                    };
-
-                let data = InteractionResponsePayload::deserialize_json(&json).unwrap();
+                let data = InteractionResponsePayload::deserialize_json(&json_dump)?;
 
                 if data.data.type_ == InteractionType::ApplicationCommand as u32 {
                     if let Some(d) = &data.data.data {
-                        if let Some(command) = handlers.slash_commands.get(&d.clone().id.unwrap()) {
+                        if let Some(id) = &d.id {
+                             if let Some(command) = handlers.slash_commands.get(id) {
                             let handler = command.clone();
                             if let Err(e) = handler.call(data.data.clone()).await {
-                                data.data.reply(e.to_string(), true).await;
+                                if let Some(error_handler) = &handlers.error_handler {
+                                    error_handler(DescordError::CommandHandler {
+                                        command: d.command_name.clone().unwrap_or_default(),
+                                        source: e,
+                                    });
+                                } else {
+                                    let _ = data.data.reply(e.to_string(), true).await;
+                                }
                             };
+                            }
                         }
                     }
                 } else if data.data.type_ == InteractionType::MessageComponent as u32 {
-                    let id: &str = data.data.data.as_ref().unwrap().custom_id.as_ref().unwrap();
-                    if let Some(component_handler) = handlers.component_handlers.get(id) {
-                        component_handler.call(data.data.clone()).await;
+                    if let Some(d) = &data.data.data {
+                         if let Some(custom_id) = &d.custom_id {
+                            if let Some(component_handler) = handlers.component_handlers.get(custom_id) {
+                                if let Err(e) = component_handler.call(data.data.clone()).await {
+                                    if let Some(error_handler) = &handlers.error_handler {
+                                        error_handler(DescordError::CommandHandler {
+                                            command: custom_id.clone(),
+                                            source: e,
+                                        });
+                                    } else {
+                                        log::error!("Component handler error: {}", e);
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else if data.data.type_ == InteractionType::ApplicationCommandAutocomplete as u32
                 {
-                    let slash_command = handlers
-                        .slash_commands
-                        .get(data.data.data.as_ref().unwrap().id.as_ref().unwrap())
-                        .unwrap();
-                    let options = &data.data.data.as_ref().unwrap().options.as_ref().unwrap();
+                    if let Some(d) = &data.data.data {
+                        if let Some(id) = &d.id {
+                            if let Some(slash_command) = handlers.slash_commands.get(id) {
+                                if let Some(options) = &d.options {
+                                    for (idx, itm) in options.iter().enumerate() {
+                                        if itm.focused.unwrap_or(false) {
+                                            // SAFETY: We are sure that the fn_param_autocomplete is not None
+                                            // checks need to be added though
+                                            if let Some(autocomplete_fn) = slash_command.fn_param_autocomplete.get(idx).and_then(|f| *f) {
+                                                 let choices_vec = autocomplete_fn(itm.value.clone()).await;
+                                                 let choices: Vec<InteractionAutoCompleteChoice> = choices_vec.into_iter()
+                                                    .map(|i| InteractionAutoCompleteChoice {
+                                                        name: i.clone(),
+                                                        value: i,
+                                                    })
+                                                    .collect();
 
-                    for (idx, itm) in options.iter().enumerate() {
-                        if itm.focused.unwrap_or(false) {
-                            // SAFETY: We are sure that the fn_param_autocomplete is not None
-                            let choices = slash_command.fn_param_autocomplete[idx].unwrap()(
-                                itm.value.clone(),
-                            )
-                            .await
-                            .into_iter()
-                            .map(|i| InteractionAutoCompleteChoice {
-                                name: i.clone(),
-                                value: i,
-                            })
-                            .collect();
-
-                            request(
-                                Method::POST,
-                                &format!(
-                                    "/interactions/{}/{}/callback",
-                                    data.data.id, data.data.token
-                                ),
-                                Some(
-                                    &InteractionAutoCompleteChoices::new(choices).serialize_json(),
-                                ),
-                            )
-                            .await;
+                                                request(
+                                                    Method::POST,
+                                                    &format!(
+                                                        "interactions/{}/{}/callback",
+                                                        data.data.id, data.data.token
+                                                    ),
+                                                    Some(&InteractionAutoCompleteChoices::new(choices).serialize_json()),
+                                                )
+                                                .await?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -452,8 +484,16 @@ impl WsManager {
         };
 
         if let Some(handler) = handlers.event_handlers.get(&event) {
-            // TODO: pass context data along with the error for error reporting
-            handler.call(data).await;
+            if let Err(e) = handler.call(data).await {
+                if let Some(error_handler) = &handlers.error_handler {
+                    error_handler(DescordError::EventHandler {
+                        event: format!("{:?}", event),
+                        source: e,
+                    });
+                } else {
+                    log::error!("Event handler error: {}", e);
+                }
+            }
         }
 
         Ok(())
@@ -522,39 +562,39 @@ impl WsManager {
         id: String,
         guild: &Guild,
         channel: Option<&Channel>,
-    ) -> u64 {
+    ) -> Result<u64, DescordError> {
         // Check if member is the guild owner
         if guild.owner_id == id {
-            return ADMINISTRATOR;
+            return Ok(ADMINISTRATOR);
         }
 
         // Start with default role permissions or bot-specific permissions
-        let mut base_permissions = guild
-            .default_role()
-            .await
-            .unwrap()
+        let default_role = guild.default_role().await?;
+        let mut base_permissions = default_role
             .permissions
             .parse::<u64>()
-            .unwrap();
+            .map_err(|_| DescordError::Other("Failed to parse default role permissions".to_string()))?;
 
         // Aggregate permissions from member's roles
         for role_id in &roles {
             if let Ok(role) = guild.fetch_role(role_id).await {
-                base_permissions |= role.permissions.parse::<u64>().unwrap();
+                if let Ok(perms) = role.permissions.parse::<u64>() {
+                    base_permissions |= perms;
+                }
             }
         }
 
         // Administrator check
         if base_permissions & ADMINISTRATOR == ADMINISTRATOR {
-            return ADMINISTRATOR;
+            return Ok(ADMINISTRATOR);
         }
 
         // Apply permission overwrites if channel is provided
         if let Some(channel) = channel {
             if let Some(overwrites) = &channel.permission_overwrites {
                 for overwrite in overwrites {
-                    let allow = overwrite.allow.parse::<u64>().unwrap();
-                    let deny = overwrite.deny.parse::<u64>().unwrap();
+                    let allow = overwrite.allow.parse::<u64>().unwrap_or(0);
+                    let deny = overwrite.deny.parse::<u64>().unwrap_or(0);
 
                     if overwrite.overwrite_type == 1 && overwrite.id == id {
                         // Member specific overwrites
@@ -569,7 +609,7 @@ impl WsManager {
             }
         }
 
-        base_permissions
+        Ok(base_permissions)
     }
 }
 
@@ -578,6 +618,7 @@ pub struct Handlers {
     pub commands: Arc<HashMap<String, Command>>,
     pub slash_commands: Arc<HashMap<String, SlashCommand>>,
     pub component_handlers: Arc<HashMap<String, ComponentHandler>>,
+    pub error_handler: Option<ErrorHandlerFn>,
 }
 
 impl Clone for Handlers {
@@ -587,6 +628,7 @@ impl Clone for Handlers {
             commands: Arc::clone(&self.commands),
             slash_commands: Arc::clone(&self.slash_commands),
             component_handlers: Arc::clone(&self.component_handlers),
+            error_handler: self.error_handler.clone(),
         }
     }
 }

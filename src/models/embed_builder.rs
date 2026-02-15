@@ -206,9 +206,9 @@ impl EmbedBuilder {
     /// * `value` - The value of the field.
     /// * `inline` - Whether the field is inline.
     ///
-    /// # Panics
+    /// # Notes
     ///
-    /// Panics if the embed already contains 25 fields.
+    /// If the embed already contains 25 fields, this method will do nothing.
     ///
     /// # Examples
     ///
@@ -216,8 +216,12 @@ impl EmbedBuilder {
     /// let builder = EmbedBuilder::new().field("Field name", "Field value", true);
     /// ```
     pub fn field(mut self, name: &str, value: &str, inline: bool) -> Self {
-        if self.embed.fields.len() == 25 {
-            panic!("Embeds can only contain max of 25 fields");
+        if self.embed.fields.len() >= 25 {
+            log::warn!(
+                "Embeds can only contain max of 25 fields, ignoring field '{}'",
+                name
+            );
+            return self;
         }
 
         self.embed.fields.push(embed::EmbedField {
@@ -235,9 +239,10 @@ impl EmbedBuilder {
     ///
     /// * `fields` - A vector of fields.
     ///
-    /// # Panics
+    /// # Notes
     ///
-    /// Panics if the embed already contains 25 fields.
+    /// If the embed already contains 25 fields, this method will do nothing.
+    /// If adding the fields would exceed 25 fields, only the fields that fit will be added.
     ///
     /// # Examples
     ///
@@ -257,11 +262,17 @@ impl EmbedBuilder {
     /// let builder = EmbedBuilder::new().fields(fields);
     /// ```
     pub fn fields(mut self, fields: Vec<embed::EmbedField>) -> Self {
-        if self.embed.fields.len() + fields.len() > 25 {
-            panic!("Embeds can only contain max of 25 fields");
+        let remaining = 25 - self.embed.fields.len();
+        if remaining > 0 {
+            let take = std::cmp::min(remaining, fields.len());
+            if take < fields.len() {
+                log::warn!("Embeds can only contain max of 25 fields, truncating fields");
+            }
+            self.embed.fields.extend(fields.into_iter().take(take));
+        } else {
+            log::warn!("Embeds can only contain max of 25 fields, ignoring all new fields");
         }
 
-        self.embed.fields.extend(fields.into_iter());
         self
     }
 }

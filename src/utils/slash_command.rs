@@ -56,16 +56,33 @@ impl CommandOption {
     }
 }
 
-pub async fn register_slash_commands(commands: Vec<SlashCommand>) -> HashMap<String, SlashCommand> {
+pub async fn register_slash_commands(
+    commands: Vec<SlashCommand>,
+) -> HashMap<String, SlashCommand> {
     let mut slash_commands = HashMap::new();
-    let bot_id = fetch_bot_id().await;
-    let registered_commands = fetch_application_commands(&bot_id).await;
+    let bot_id = match fetch_bot_id().await {
+        Ok(id) => id,
+        Err(e) => {
+            log::error!("Failed to fetch bot id: {}", e);
+            return slash_commands;
+        }
+    };
+    let registered_commands = match fetch_application_commands(&bot_id).await {
+        Ok(cmds) => cmds,
+        Err(e) => {
+            log::error!("Failed to fetch application commands: {}", e);
+            return slash_commands;
+        }
+    };
 
     for local_command in &commands {
         let mut permissions: u64 = 0;
         for permission in &local_command.permissions {
-            let permission = perms::parse(permission).expect("unknown permission name");
-            permissions |= permission;
+            if let Some(permission) = perms::parse(permission) {
+                permissions |= permission;
+            } else {
+                log::error!("Unknown permission name: {}", permission);
+            }
         }
 
         let local_options = local_command
@@ -111,7 +128,7 @@ pub async fn register_slash_commands(commands: Vec<SlashCommand>) -> HashMap<Str
                 .collect::<Vec<_>>();
 
             if local_options != registered_options {
-                request(
+                let _ = request(
                     Method::PATCH,
                     format!("applications/{}/commands/{}", bot_id, registered_command.id).as_str(),
                     Some(
@@ -143,7 +160,7 @@ pub async fn register_slash_commands(commands: Vec<SlashCommand>) -> HashMap<Str
             }
         } else {
             // If the command does not exist in the fetched commands, register it
-            let response = request(
+            match request(
                 Method::POST,
                 format!("applications/{}/commands", bot_id),
                 Some(
@@ -157,21 +174,31 @@ pub async fn register_slash_commands(commands: Vec<SlashCommand>) -> HashMap<Str
                 ),
             )
             .await
-            .text()
-            .await
-            .unwrap();
-
-            let command_id = json::parse(&response).expect("Failed to parse JSON response")["id"]
-                .as_str()
-                .expect("Failed to get 'id' from JSON response")
-                .to_string();
-
-            info!(
-                "Registered '{}' slash command, command id: {}",
-                local_command.name, command_id
-            );
-
-            slash_commands.insert(command_id, local_command.clone());
+            {
+                Ok(response) => {
+                    if let Ok(text) = response.text().await {
+                        if let Ok(json) = json::parse(&text) {
+                            if let Some(id) = json["id"].as_str() {
+                                let command_id = id.to_string();
+                                info!(
+                                    "Registered '{}' slash command, command id: {}",
+                                    local_command.name, command_id
+                                );
+                                slash_commands.insert(command_id, local_command.clone());
+                            } else {
+                                log::error!("Failed to get 'id' from JSON response: {}", text);
+                            }
+                        } else {
+                            log::error!("Failed to parse JSON response: {}", text);
+                        }
+                    } else {
+                        log::error!("Failed to get text from response");
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to register command: {}", e);
+                }
+            }
         }
     }
 
@@ -181,7 +208,7 @@ pub async fn register_slash_commands(commands: Vec<SlashCommand>) -> HashMap<Str
             .iter()
             .any(|cmd| cmd.name == registered_command.name)
         {
-            request(
+            let _ = request(
                 Method::DELETE,
                 format!("applications/{}/commands/{}", bot_id, registered_command.id).as_str(),
                 None,

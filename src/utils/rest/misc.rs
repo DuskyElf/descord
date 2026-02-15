@@ -5,7 +5,7 @@ pub async fn request_with_headers<T: AsRef<str>>(
     endpoint: T,
     data: Option<T>,
     headers: HeaderMap<HeaderValue>,
-) -> Response {
+) -> Result<Response, DescordError> {
     let mut h = get_headers();
     for (k, v) in headers.into_iter() {
         if let Some(k) = k {
@@ -16,7 +16,11 @@ pub async fn request_with_headers<T: AsRef<str>>(
     request_int(method, endpoint, data, h).await
 }
 
-pub async fn request<T: AsRef<str>>(method: Method, endpoint: T, data: Option<T>) -> Response {
+pub async fn request<T: AsRef<str>>(
+    method: Method,
+    endpoint: T,
+    data: Option<T>,
+) -> Result<Response, DescordError> {
     request_int(method, endpoint, data, get_headers()).await
 }
 
@@ -25,7 +29,7 @@ async fn request_int<T: AsRef<str>>(
     endpoint: T,
     data: Option<T>,
     headers: HeaderMap<HeaderValue>,
-) -> Response {
+) -> Result<Response, DescordError> {
     let client = Client::new();
     let url = format!("{}/{}", API, endpoint.as_ref());
 
@@ -49,7 +53,11 @@ async fn request_int<T: AsRef<str>>(
         seen = false;
     }
 
-    let mut response = request_builder.try_clone().unwrap().send().await.unwrap();
+    let cloned = request_builder
+        .try_clone()
+        .ok_or_else(|| DescordError::Other("Failed to clone request builder".to_string()))?;
+    let mut response = cloned.send().await?;
+
     while response.status() == StatusCode::TOO_MANY_REQUESTS {
         let retry_after = response
             .headers()
@@ -65,7 +73,11 @@ async fn request_int<T: AsRef<str>>(
         );
 
         sleep(Duration::from_secs_f32(retry_after)).await;
-        response = request_builder.try_clone().unwrap().send().await.unwrap();
+
+        let cloned = request_builder
+            .try_clone()
+            .ok_or_else(|| DescordError::Other("Failed to clone request builder".to_string()))?;
+        response = cloned.send().await?;
     }
 
     if let Some(bucket) = response.headers().get("x-ratelimit-bucket") {
@@ -79,7 +91,32 @@ async fn request_int<T: AsRef<str>>(
         }
     }
 
-    response
+    // Check for API errors (4xx/5xx)
+    let status = response.status();
+    if status.is_client_error() || status.is_server_error() {
+        let status_code = status.as_u16();
+        let body = response.text().await.unwrap_or_default();
+
+        // Try to parse Discord's error JSON: {"code": ..., "message": ...}
+        let (code, message) = if let Ok(parsed) = json::parse(&body) {
+            let code = parsed["code"].as_u64();
+            let message = parsed["message"]
+                .as_str()
+                .unwrap_or(&body)
+                .to_string();
+            (code, message)
+        } else {
+            (None, body)
+        };
+
+        return Err(DescordError::Api(DiscordApiError {
+            status: status_code,
+            code,
+            message,
+        }));
+    }
+
+    Ok(response)
 }
 
 pub async fn update_rate_limit_info(headers: &HeaderMap<HeaderValue>, bucket: &str) {
@@ -130,33 +167,35 @@ pub fn get_headers() -> HeaderMap {
     map
 }
 
-pub async fn fetch_bot_id() -> String {
-    let response = request(Method::GET, "users/@me", None).await;
-    json::parse(response.text().await.unwrap().as_str()).unwrap_or_else(|_| {
-        log::error!("Failed to parse JSON response");
-        JsonValue::Null
-    })["id"]
+pub async fn fetch_bot_id() -> Result<String, DescordError> {
+    let response = request(Method::GET, "users/@me", None).await?;
+    let text = response.text().await.map_err(DescordError::Http)?;
+    let parsed = json::parse(&text)
+        .map_err(|_| DescordError::JsonParse(format!("Failed to parse bot info: {}", text)))?;
+
+    parsed["id"]
         .as_str()
-        .unwrap_or_else(|| {
-            log::error!("Failed to get 'id' from JSON response");
-            ""
-        })
-        .to_string()
+        .map(|s| s.to_string())
+        .ok_or_else(|| DescordError::JsonParse("Missing 'id' field in bot info".to_string()))
 }
 
 /// Returns a new DM channel with a user (or return
 /// an existing one). Returns a `DirectMessageChannel` object.
-pub async fn fetch_dm(user_id: &str) -> DirectMessageChannel {
+pub async fn fetch_dm(user_id: &str) -> Result<DirectMessageChannel, DescordError> {
     let url = format!("users/@me/channels");
     let data = json::stringify(object! {
         recipient_id: user_id
     });
 
-    let response = request(Method::POST, &url, Some(&data)).await;
-    DirectMessageChannel::deserialize_json(&response.text().await.unwrap()).unwrap()
+    let response = request(Method::POST, &url, Some(&data)).await?;
+    let text = response.text().await.map_err(DescordError::Http)?;
+    DirectMessageChannel::deserialize_json(&text).map_err(DescordError::DeserializeJson)
 }
 
-pub async fn send_dm(user_id: &str, data: impl Into<CreateMessageData>) {
-    let dm_channel = fetch_dm(user_id).await;
-    send(&dm_channel.id, None, data).await;
+pub async fn send_dm(
+    user_id: &str,
+    data: impl Into<CreateMessageData>,
+) -> Result<Message, DescordError> {
+    let dm_channel = fetch_dm(user_id).await?;
+    send(&dm_channel.id, None, data).await
 }

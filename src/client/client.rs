@@ -37,6 +37,7 @@ pub struct Client {
     event_handlers: HashMap<Event, EventHandler>,
     component_handlers: HashMap<String, ComponentHandler>,
     prefix: String,
+    error_handler: Option<ErrorHandlerFn>,
 }
 
 impl Client {
@@ -68,6 +69,7 @@ impl Client {
             slash_commands: HashMap::new(),
             event_handlers: HashMap::new(),
             component_handlers: HashMap::new(),
+            error_handler: None,
         }
     }
 
@@ -88,9 +90,30 @@ impl Client {
                     commands: self.commands.into(),
                     slash_commands: self.slash_commands.into(),
                     component_handlers: self.component_handlers.into(),
+                    error_handler: self.error_handler.clone(),
                 },
             )
             .await;
+    }
+
+    /// Sets the error handler for the client.
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - The error handler function.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// client.on_error(|err| {
+    ///     println!("Error: {:?}", err);
+    /// });
+    /// ```
+    pub fn on_error<F>(&mut self, f: F)
+    where
+        F: Fn(DescordError) + Send + Sync + 'static,
+    {
+        self.error_handler = Some(std::sync::Arc::new(f));
     }
 
     /// Returns the bot token.
@@ -155,7 +178,7 @@ impl Client {
     /// client.register_commands(vec![commands::echo()]);
     /// ```
     pub fn register_commands(&mut self, commands: Vec<Command>) {
-        if self.intents & GatewayIntent::MESSAGE_CONTENT == 0 {
+        if (self.intents & GatewayIntent::MESSAGE_CONTENT) == 0 {
             log::error!("MESSAGE_CONTENT intent is required for message commands to work");
         }
 
@@ -273,10 +296,12 @@ impl Client {
             msg: Message,
             _: Vec<internals::Value>,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = crate::DescordResult> + Send + 'static>,
+            Box<dyn std::future::Future<Output = crate::HandlerResult> + Send + 'static>,
         > {
             Box::pin(async move {
-                msg.reply(HELP_EMBED.lock().await.clone()).await;
+                msg.reply(HELP_EMBED.lock().await.clone())
+                    .await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
                 Ok(())
             })
         }

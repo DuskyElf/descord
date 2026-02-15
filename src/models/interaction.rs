@@ -2,6 +2,7 @@ use json::JsonValue;
 use std::collections::HashMap;
 
 use crate::consts::*;
+use crate::internals::DescordError;
 use crate::models::allowed_mentions::AllowedMentions;
 use crate::models::guild::Member;
 use crate::prelude::{Component, Embed};
@@ -70,9 +71,15 @@ impl Interaction {
     /// ```
     /// interaction.reply("Hello, world!", true).await;
     /// ```
-    pub async fn reply(&self, response: impl Into<CreateMessageData>, ephemeral: bool) {
+    pub async fn reply(
+        &self,
+        response: impl Into<CreateMessageData>,
+        ephemeral: bool,
+    ) -> Result<(), DescordError> {
         let mut message_data: CreateMessageData = response.into();
-        ephemeral.then(|| message_data.flags = Some(64));
+        if ephemeral {
+            message_data.flags = Some(64);
+        }
 
         let response = InteractionResponse {
             type_: 4,
@@ -85,7 +92,8 @@ impl Interaction {
             format!("interactions/{}/{}/callback", self.id, self.token),
             Some(json_response),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     /// Defers the interaction response.
@@ -95,7 +103,7 @@ impl Interaction {
     /// ```
     /// interaction.defer().await;
     /// ```
-    pub async fn defer(&self) {
+    pub async fn defer(&self) -> Result<(), DescordError> {
         let response = InteractionResponse {
             type_: 5,
             data: None,
@@ -107,7 +115,8 @@ impl Interaction {
             format!("interactions/{}/{}/callback", self.id, self.token),
             Some(json_response),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     /// Sends a follow-up message to the interaction.
@@ -121,7 +130,7 @@ impl Interaction {
     /// ```
     /// interaction.followup("Follow-up message").await;
     /// ```
-    pub async fn followup<S: AsRef<str>>(&self, response: S) {
+    pub async fn followup<S: AsRef<str>>(&self, response: S) -> Result<(), DescordError> {
         request(
             Method::POST,
             format!("webhooks/{}/{}", self.application_id, self.token),
@@ -132,7 +141,8 @@ impl Interaction {
                 .dump(),
             ),
         )
-        .await;
+        .await?;
+        Ok(())
     }
 
     /// Edits the original interaction response.
@@ -146,10 +156,13 @@ impl Interaction {
     /// ```
     /// interaction.edit_original("Edited message").await;
     /// ```
-    pub async fn edit_original(&self, response: impl Into<CreateMessageData>) {
+    pub async fn edit_original(
+        &self,
+        response: impl Into<CreateMessageData>,
+    ) -> Result<(), DescordError> {
         let response: CreateMessageData = response.into();
 
-        let resp = request(
+        request(
             Method::PATCH,
             format!(
                 "webhooks/{}/{}/messages/@original",
@@ -157,9 +170,9 @@ impl Interaction {
             ),
             Some(response.serialize_json()),
         )
-        .await;
+        .await?;
 
-        println!("{}", resp.text().await.unwrap());
+        Ok(())
     }
 
     /// Deletes the original interaction response.
@@ -169,7 +182,7 @@ impl Interaction {
     /// ```
     /// interaction.delete_original().await;
     /// ```
-    pub async fn delete_original(&self) {
+    pub async fn delete_original(&self) -> Result<(), DescordError> {
         request(
             Method::DELETE,
             format!(
@@ -179,7 +192,8 @@ impl Interaction {
             .as_str(),
             None,
         )
-        .await;
+        .await?;
+        Ok(())
     }
 }
 

@@ -143,10 +143,10 @@ async fn avatar(interaction: Interaction, #[doc = "User to fetch avatar from"] u
 
 #[command(description = "Count up or down")]
 async fn counter(msg: Message) {
-    let msg = msg.send_in_channel("Count: 0").await;
+    let msg = msg.send_in_channel("Count: 0").await.unwrap();
 
-    msg.react("⬆").await;
-    msg.react("⬇").await;
+    msg.react("⬆").await.unwrap();
+    msg.react("⬇").await.unwrap();
 }
 
 #[command(description = "React to the message with the given emoji")]

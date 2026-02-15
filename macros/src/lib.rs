@@ -166,7 +166,7 @@ pub fn component(args: TokenStream, input: TokenStream) -> TokenStream {
 
             fn f(
                 data: Interaction,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>> {
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>> {
                 Box::pin(async move {
                     #let_stmt
                     #function_body
@@ -227,10 +227,6 @@ pub fn event(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    // if visitor.has_unwrap {
-        // println!("Warning: Function '{}' uses .unwrap(). Consider using ? operator if unwrapping a Result for proper error handling", function_name);
-    // }
-
     if function.sig.inputs.len() != 1 {
         panic!("Expected only one parameter");
     }
@@ -277,7 +273,7 @@ pub fn event(args: TokenStream, input: TokenStream) -> TokenStream {
 
             fn f(
                 data: descord::internals::HandlerValue
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>> {
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>> {
                 Box::pin(async move {
                     #let_stmt
                     #function_body
@@ -338,10 +334,6 @@ pub fn command(args: TokenStream, input: TokenStream) -> TokenStream {
     visit_mut::visit_block_mut(&mut visitor, &mut function_body);
     let mut visitor = UnwrapVisitor { has_unwrap: false };
     visit_mut::visit_block_mut(&mut visitor, &mut function_body);
-
-    // if visitor.has_unwrap {
-        // println!("Warning: Function '{}' uses .unwrap(). Consider using ? operator if unwrapping a Result for proper error handling", function_name);
-    // }
 
     let function_params = &function.sig.inputs;
     let function_vis = function.vis;
@@ -456,7 +448,7 @@ pub fn command(args: TokenStream, input: TokenStream) -> TokenStream {
             fn f(
                 #first_param_name: Message,
                 args: Vec<internals::Value>
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>> {
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>> {
                 Box::pin(async move {
                     #let_stmts
                     drop(args);
@@ -537,9 +529,6 @@ pub fn slash(args: TokenStream, input: TokenStream) -> TokenStream {
     visit_mut::visit_block_mut(&mut visitor, &mut function_body);
     let mut visitor = UnwrapVisitor { has_unwrap: false };
     visit_mut::visit_block_mut(&mut visitor, &mut function_body);
-    // if visitor.has_unwrap {
-        // println!("Warning: Function '{}' uses .unwrap(). Consider using ? operator if unwrapping a Result for proper error handling", function_name);
-    // }
     let function_params = &function.sig.inputs;
     let function_vis = function.vis;
 
@@ -687,7 +676,7 @@ pub fn slash(args: TokenStream, input: TokenStream) -> TokenStream {
             fn f(
                 #first_param_name: descord::models::interaction::Interaction,
                 args: Vec<internals::Value>
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = DescordResult> + Send + 'static>> {
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = HandlerResult> + Send + 'static>> {
                 Box::pin(async move {
                     #let_stmts
                     drop(args);

@@ -4,10 +4,10 @@ use super::*;
 ///
 /// # Arguments
 /// guild_id - The ID of the guild to get roles from
-pub async fn fetch_roles(guild_id: &str) -> Result<Vec<Role>, Box<dyn std::error::Error>> {
+pub async fn fetch_roles(guild_id: &str) -> Result<Vec<Role>, DescordError> {
     let url = format!("guilds/{guild_id}/roles");
-    let resp = request(Method::GET, &url, None).await.text().await.unwrap();
-    let roles: Vec<Role> = DeJson::deserialize_json(&resp).unwrap();
+    let resp = request(Method::GET, &url, None).await?.text().await.map_err(DescordError::Http)?;
+    let roles: Vec<Role> = DeJson::deserialize_json(&resp).map_err(DescordError::DeserializeJson)?;
 
     for role in &roles {
         ROLE_CACHE.lock().await.put(role.id.clone(), role.clone());
@@ -21,14 +21,14 @@ pub async fn fetch_roles(guild_id: &str) -> Result<Vec<Role>, Box<dyn std::error
 /// # Arguments
 /// guild_id - The ID of the guild the role is in
 /// role_id - The ID of the role to get
-pub async fn fetch_role(guild_id: &str, role_id: &str) -> Result<Role, Box<dyn std::error::Error>> {
+pub async fn fetch_role(guild_id: &str, role_id: &str) -> Result<Role, DescordError> {
     if let Some(role) = ROLE_CACHE.lock().await.get(role_id).cloned() {
         info!("Role cache hit");
         return Ok(role);
     }
     let url = format!("guilds/{guild_id}/roles");
-    let resp = request(Method::GET, &url, None).await.text().await.unwrap();
-    let roles: Vec<Role> = DeJson::deserialize_json(&resp).unwrap();
+    let resp = request(Method::GET, &url, None).await?.text().await.map_err(DescordError::Http)?;
+    let roles: Vec<Role> = DeJson::deserialize_json(&resp).map_err(DescordError::DeserializeJson)?;
     let mut answer = None;
     for role in &roles {
         ROLE_CACHE.lock().await.put(role.id.clone(), role.clone());
@@ -39,7 +39,10 @@ pub async fn fetch_role(guild_id: &str, role_id: &str) -> Result<Role, Box<dyn s
     if let Some(answer) = answer {
         Ok(answer)
     } else {
-        Err("Role not found".into())
+        Err(DescordError::NotFound {
+            resource_type: "Role".to_string(),
+            id: role_id.to_string(),
+        })
     }
 }
 
@@ -48,9 +51,9 @@ pub async fn fetch_role(guild_id: &str, role_id: &str) -> Result<Role, Box<dyn s
 /// # Arguments
 /// guild_id - The ID of the guild the role is in
 /// role_id - The ID of the role to delete
-pub async fn delete_role(guild_id: &str, role_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn delete_role(guild_id: &str, role_id: &str) -> Result<(), DescordError> {
     let url = format!("guilds/{guild_id}/roles/{role_id}");
-    request(Method::DELETE, &url, None).await.text().await?;
+    request(Method::DELETE, &url, None).await?;
     ROLE_CACHE.lock().await.pop_entry(role_id);
     Ok(())
 }
@@ -70,15 +73,15 @@ pub async fn edit_role_position(
     guild_id: &str,
     role_id: &str,
     position: i32,
-) -> Result<Role, Box<dyn std::error::Error>> {
+) -> Result<Role, DescordError> {
     let url = format!("guilds/{guild_id}/roles/{role_id}");
     let body = object! { "position": position };
     let resp = request(Method::PATCH, url, Some(body.dump()))
-        .await
+        .await?
         .text()
         .await
-        .unwrap();
-    let role: Role = DeJson::deserialize_json(&resp).unwrap();
+        .map_err(DescordError::Http)?;
+    let role: Role = DeJson::deserialize_json(&resp).map_err(DescordError::DeserializeJson)?;
     ROLE_CACHE.lock().await.put(role.id.clone(), role.clone());
     Ok(role)
 }
@@ -99,7 +102,7 @@ pub async fn create_role(
     color: crate::color::Color,
     hoist: bool,
     mentionable: bool,
-) -> Result<Role, Box<dyn std::error::Error>> {
+) -> Result<Role, DescordError> {
     let url = format!("guilds/{guild_id}/roles");
 
     let color: u32 = color.into();
@@ -112,11 +115,11 @@ pub async fn create_role(
     };
 
     let resp = request(Method::POST, url, Some(body.dump()))
-        .await
+        .await?
         .text()
         .await
-        .unwrap();
-    let role: Role = DeJson::deserialize_json(&resp).unwrap();
+        .map_err(DescordError::Http)?;
+    let role: Role = DeJson::deserialize_json(&resp).map_err(DescordError::DeserializeJson)?;
 
     ROLE_CACHE.lock().await.put(role.id.clone(), role.clone());
     Ok(role)
@@ -126,9 +129,9 @@ pub async fn add_role(
     guild_id: &str,
     user_id: &str,
     role_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), DescordError> {
     let url = format!("guilds/{guild_id}/members/{user_id}/roles/{role_id}");
-    let resp = request(Method::PUT, &url, None).await.error_for_status()?;
+    request(Method::PUT, &url, None).await?;
     Ok(())
 }
 
@@ -136,10 +139,8 @@ pub async fn remove_role(
     guild_id: &str,
     user_id: &str,
     role_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), DescordError> {
     let url = format!("guilds/{guild_id}/members/{user_id}/roles/{role_id}");
-    let resp = request(Method::DELETE, &url, None)
-        .await
-        .error_for_status()?;
+    request(Method::DELETE, &url, None).await?;
     Ok(())
 }
